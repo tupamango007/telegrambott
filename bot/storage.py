@@ -1,4 +1,4 @@
-"""SQLite-хранилище: бизнес-подключения, история чатов и настройки."""
+"""SQLite-хранилище: бизнес-подключения, состояние чатов и настройки."""
 
 import sqlite3
 import time
@@ -13,18 +13,16 @@ CREATE TABLE IF NOT EXISTS connections (
     can_reply    INTEGER NOT NULL,
     is_enabled   INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS messages (
-    id       INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id  INTEGER NOT NULL,
-    role     TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-    text     TEXT NOT NULL,
-    ts       REAL NOT NULL
-);
-CREATE INDEX IF NOT EXISTS messages_chat ON messages (chat_id, id);
 CREATE TABLE IF NOT EXISTS chats (
     chat_id      INTEGER PRIMARY KEY,
     paused_until REAL NOT NULL DEFAULT 0,
     ignored      INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS sent_replies (
+    chat_id  INTEGER NOT NULL,
+    key      TEXT NOT NULL,
+    sent_at  REAL NOT NULL,
+    PRIMARY KEY (chat_id, key)
 );
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
@@ -74,21 +72,19 @@ class Storage:
         row = self._db.execute("SELECT 1 FROM connections WHERE owner_id = ? LIMIT 1", (user_id,)).fetchone()
         return row is not None
 
-    # --- история ---
+    # --- отправленные автоответы ---
 
-    def add_message(self, chat_id: int, role: str, text: str) -> None:
+    def mark_sent(self, chat_id: int, key: str) -> None:
         with self._db:
             self._db.execute(
-                "INSERT INTO messages (chat_id, role, text, ts) VALUES (?, ?, ?, ?)",
-                (chat_id, role, text, time.time()),
+                "INSERT OR REPLACE INTO sent_replies VALUES (?, ?, ?)", (chat_id, key, time.time())
             )
 
-    def history(self, chat_id: int, limit: int) -> list[tuple[str, str]]:
-        rows = self._db.execute(
-            "SELECT role, text FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
-            (chat_id, limit),
-        ).fetchall()
-        return [(role, text) for role, text in reversed(rows)]
+    def sent_recently(self, chat_id: int, key: str, seconds: float) -> bool:
+        row = self._db.execute(
+            "SELECT sent_at FROM sent_replies WHERE chat_id = ? AND key = ?", (chat_id, key)
+        ).fetchone()
+        return row is not None and row[0] > time.time() - seconds
 
     # --- состояние чатов ---
 

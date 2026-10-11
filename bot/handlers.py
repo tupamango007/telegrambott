@@ -3,35 +3,21 @@
 import asyncio
 import html
 import logging
+from datetime import datetime, timezone
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import BusinessConnection, Message
 
-from .ai import Responder
 from .config import Config
+from .replies import TemplateStore, choose_reply
 from .storage import Connection, Storage
 
 log = logging.getLogger(__name__)
 
-CONTENT_LABELS = {
-    "sticker": "[стикер]",
-    "photo": "[фото]",
-    "video": "[видео]",
-    "voice": "[голосовое сообщение]",
-    "video_note": "[видеосообщение]",
-    "audio": "[аудио]",
-    "document": "[файл]",
-    "animation": "[гифка]",
-    "location": "[геолокация]",
-    "contact": "[контакт]",
-}
-
 
 def message_text(message: Message) -> str:
-    body = message.text or message.caption or ""
-    label = CONTENT_LABELS.get(message.content_type, "") if not message.text else ""
-    return " ".join(p for p in (label, body) if p) or f"[{message.content_type}]"
+    return message.text or message.caption or ""
 
 
 def connection_from_telegram(bc: BusinessConnection) -> Connection:
@@ -45,9 +31,11 @@ def connection_from_telegram(bc: BusinessConnection) -> Connection:
     )
 
 
-def create_router(config: Config, storage: Storage, responder: Responder) -> Router:
+def create_router(config: Config, storage: Storage, templates: TemplateStore) -> Router:
     router = Router()
     pending: dict[int, asyncio.Task] = {}
+    # Сообщения собеседника, пришедшие за время ожидания перед ответом.
+    unanswered: dict[int, list[str]] = {}
 
     async def get_connection(bot: Bot, connection_id: str) -> Connection:
         conn = storage.get_connection(connection_id)
@@ -69,23 +57,27 @@ def create_router(config: Config, storage: Storage, responder: Responder) -> Rou
         chat_id = message.chat.id
         # Ждём: собеседник может дописать ещё сообщения или владелец ответит сам.
         await asyncio.sleep(config.reply_delay_seconds)
+        texts = unanswered.pop(chat_id, [])
         if not should_reply(chat_id, conn):
             return
 
-        await bot.send_chat_action(chat_id, "typing", business_connection_id=conn.id)
-        text = await responder.reply(storage.history(chat_id, config.history_limit))
-        if text is None or not should_reply(chat_id, conn):
+        name = message.from_user.first_name if message.from_user else ""
+        reply = choose_reply(templates.get(), "\n".join(texts), name, datetime.now(timezone.utc))
+        if reply is None:
+            return
+        # Не повторяем один и тот же шаблон, если собеседник пишет снова и снова.
+        if storage.sent_recently(chat_id, reply.key, config.reply_cooldown_minutes * 60):
             return
 
-        await bot.send_message(chat_id, text, business_connection_id=conn.id)
-        storage.add_message(chat_id, "assistant", text)
-        log.info("Ответил в чат %s", chat_id)
+        await bot.send_message(chat_id, reply.text, business_connection_id=conn.id)
+        storage.mark_sent(chat_id, reply.key)
+        log.info("Ответил в чат %s шаблоном %s", chat_id, reply.key)
 
         if config.notify_owner:
             who = html.escape(message.chat.full_name or str(chat_id))
             await bot.send_message(
                 conn.owner_chat_id,
-                f"🤖 Ответил за вас в чате <b>{who}</b> (<code>{chat_id}</code>):\n\n{html.escape(text)}",
+                f"🤖 Ответил за вас в чате <b>{who}</b> (<code>{chat_id}</code>):\n\n{html.escape(reply.text)}",
                 parse_mode="HTML",
             )
 
@@ -105,28 +97,27 @@ def create_router(config: Config, storage: Storage, responder: Responder) -> Rou
     async def on_business_message(message: Message, bot: Bot) -> None:
         if message.business_connection_id is None or message.from_user is None:
             return
-        # Наши собственные ответы приходят обратно как бизнес-сообщения — они уже в истории.
+        # Наши собственные ответы приходят обратно как бизнес-сообщения.
         if message.sender_business_bot is not None:
             return
 
         conn = await get_connection(bot, message.business_connection_id)
         chat_id = message.chat.id
-        text = message_text(message)
 
         if message.from_user.id == conn.owner_id:
-            # Владелец ответил сам — запоминаем и даём ему вести разговор.
-            storage.add_message(chat_id, "assistant", text)
+            # Владелец ответил сам — даём ему вести разговор.
+            unanswered.pop(chat_id, None)
             storage.pause_chat(chat_id, config.owner_takeover_minutes * 60)
             if task := pending.pop(chat_id, None):
                 task.cancel()
             return
 
-        if message.from_user.is_bot:
+        if message.from_user.is_bot or message.sticker is not None:
             return
 
-        storage.add_message(chat_id, "user", text)
         if not should_reply(chat_id, conn):
             return
+        unanswered.setdefault(chat_id, []).append(message_text(message))
 
         if task := pending.pop(chat_id, None):
             task.cancel()
@@ -170,7 +161,7 @@ def create_router(config: Config, storage: Storage, responder: Responder) -> Rou
         if not storage.is_owner(message.from_user.id):
             return
         state = "включены" if storage.is_enabled() else "выключены"
-        await message.answer(f"Автоответы {state}. Модель: {config.claude_model}.")
+        await message.answer(f"Автоответы {state}. Шаблоны: {config.replies_file}.")
 
     @router.message(private_chat, Command("ignore", "unignore"))
     async def cmd_ignore(message: Message, command: CommandObject) -> None:

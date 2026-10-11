@@ -15,12 +15,14 @@ def test_connection_roundtrip_and_owner():
     assert not s.is_owner(1)
 
 
-def test_history_order_and_limit():
+def test_sent_recently():
     s = make_storage()
-    for i in range(5):
-        s.add_message(10, "user" if i % 2 == 0 else "assistant", f"m{i}")
-    s.add_message(11, "user", "other chat")
-    assert s.history(10, 3) == [("user", "m2"), ("assistant", "m3"), ("user", "m4")]
+    assert not s.sent_recently(10, "default", 60)
+    s.mark_sent(10, "default")
+    assert s.sent_recently(10, "default", 60)
+    assert not s.sent_recently(10, "rule:0", 60)
+    assert not s.sent_recently(11, "default", 60)
+    assert not s.sent_recently(10, "default", -1)
 
 
 def test_pause_ignore_enabled():

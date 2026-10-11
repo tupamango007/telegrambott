@@ -13,7 +13,7 @@ def msg(**kw) -> Message:
 
 def test_message_text():
     assert message_text(msg(text="привет")) == "привет"
-    assert message_text(msg(caption="смотри", photo=[PhotoSize(file_id="f", file_unique_id="u", width=1, height=1)])) == "[фото] смотри"
+    assert message_text(msg(caption="смотри", photo=[PhotoSize(file_id="f", file_unique_id="u", width=1, height=1)])) == "смотри"
 
 
 def test_connection_from_telegram_uses_rights():

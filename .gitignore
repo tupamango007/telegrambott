@@ -3,5 +3,5 @@ __pycache__/
 *.pyc
 .env
 data/
-persona.md
+replies.toml
 .pytest_cache/
