@@ -2,7 +2,7 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from bot.replies import TemplateStore, Templates, choose_reply, is_night, normalize
+from bot.replies import TemplateStore, Templates, choose_reply, is_important, is_night, normalize
 
 EXAMPLE = Path(__file__).parent.parent / "replies.example.toml"
 
@@ -11,7 +11,7 @@ def templates(**kw) -> Templates:
     data = {
         "default": "Привет, {name}! Занят",
         "skip": ["ок", "спасибо"],
-        "rules": [{"keywords": ["срочно"], "replies": "Скоро отвечу"}],
+        "rules": [{"keywords": ["срочно"], "replies": "Скоро отвечу", "notify": True}],
         "night": {"start": 23, "end": 8, "replies": "Сплю"},
     }
     data.update(kw)
@@ -62,18 +62,46 @@ def test_normalize():
 
 def test_example_file_is_valid():
     t = Templates.from_dict(tomllib.loads(EXAMPLE.read_text(encoding="utf-8")))
-    assert t.default and t.rules and t.night_replies
+    assert t.default.replies and t.rules and t.night.replies and t.skip
+    assert t.rules[0].notify
 
 
 def test_store_keeps_last_good_version(tmp_path):
     path = tmp_path / "replies.toml"
     path.write_text('default = "Занят"', encoding="utf-8")
     store = TemplateStore(path)
-    assert store.get().default == ["Занят"]
+    assert store.get().default.replies == ["Занят"]
     path.write_text("default = [сломано", encoding="utf-8")
-    assert store.get().default == ["Занят"]
+    assert store.get().default.replies == ["Занят"]
 
 
 def test_store_falls_back_to_example(tmp_path):
     store = TemplateStore(tmp_path / "missing.toml", fallback=EXAMPLE)
     assert store.get().default
+
+
+def test_sticker_only_section():
+    t = templates(default={"stickers": ["S1"]})
+    reply = choose_reply(t, "привет", "Аня", DAY)
+    assert (reply.text, reply.sticker) == (None, "S1")
+
+
+def test_sticker_chance():
+    always = templates(default={"replies": "Занят", "stickers": ["S1"]}, sticker_chance=1)
+    never = templates(default={"replies": "Занят", "stickers": ["S1"]}, sticker_chance=0)
+    assert choose_reply(always, "привет", "", DAY).sticker == "S1"
+    assert choose_reply(never, "привет", "", DAY).sticker is None
+    assert choose_reply(never, "привет", "", DAY).text == "Занят"
+
+
+def test_incoming_sticker():
+    assert choose_reply(templates(), "", "", DAY, only_sticker=True) is None
+    t = templates(on_sticker={"stickers": ["S2"]})
+    reply = choose_reply(t, "", "", DAY, only_sticker=True)
+    assert (reply.key, reply.sticker) == ("sticker", "S2")
+
+
+def test_is_important():
+    assert is_important(templates(), "очень СРОЧНО")
+    assert not is_important(templates(), "привет")
+    assert not is_important(templates(rules=[{"keywords": ["срочно"], "replies": "x"}]), "срочно")
