@@ -47,7 +47,7 @@ replies = ["Увидел, что срочно — постараюсь отве�
 - Регистр и буква «ё» при сравнении не важны.
 - Файл перечитывается перед каждым ответом, поэтому перезапуск не нужен. Если в файле ошибка, бот продолжит работать с прошлой версией и напишет об ошибке в лог.
 
-## Установка
+## Локальный запуск
 
 ```bash
 python3 -m venv .venv
@@ -72,6 +72,49 @@ cp replies.example.toml replies.toml  # настройте свои ответы
 | `/unignore <chat_id>` | снова отвечать в этом чате |
 
 Остальные параметры задаются в `.env`, см. `.env.example`.
+
+## Запуск на сервере
+
+Нужен любой VPS с Ubuntu или Debian: хватит 1 ядра и 512 МБ памяти. Публичный адрес и домен не нужны, бот сам опрашивает Telegram.
+
+### Одной командой (Docker)
+
+Подключитесь к серверу по SSH и выполните:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tupamango007/telegrambott/main/deploy/install.sh | bash
+```
+
+Скрипт сам сделает всё остальное:
+1. установит Docker и скачает проект в `~/telegrambott`;
+2. спросит токен бота;
+3. запустит контейнер, который перезапускается сам после сбоев и перезагрузки сервера.
+
+Повторный запуск той же команды обновляет бота до свежей версии.
+
+Полезные команды (из папки `~/telegrambott`):
+
+| Команда | Что делает |
+|---|---|
+| `nano config/replies.toml` | правка шаблонов, применяется без перезапуска |
+| `sudo docker compose logs -f` | логи |
+| `sudo docker compose restart` | перезапуск, например после правки `.env` |
+| `sudo docker compose down` | остановка |
+
+### Без Docker (systemd)
+
+```bash
+sudo useradd -r -m -d /opt/telegrambott telegrambott
+sudo -u telegrambott git clone https://github.com/tupamango007/telegrambott.git /opt/telegrambott
+cd /opt/telegrambott
+sudo -u telegrambott python3 -m venv .venv
+sudo -u telegrambott .venv/bin/pip install -r requirements.txt
+sudo -u telegrambott cp .env.example .env              # впишите токен
+sudo -u telegrambott cp replies.example.toml replies.toml
+sudo cp deploy/telegrambott.service /etc/systemd/system/
+sudo systemctl enable --now telegrambott
+journalctl -u telegrambott -f                          # логи
+```
 
 ## Тесты
 
