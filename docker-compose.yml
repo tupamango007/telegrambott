@@ -1,0 +1,17 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      REPLIES_FILE: config/replies.toml
+      DB_PATH: data/bot.sqlite3
+    volumes:
+      # Шаблоны лежат в папке, а не отдельным файлом — так правки подхватываются без перезапуска
+      - ./config:/app/config
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

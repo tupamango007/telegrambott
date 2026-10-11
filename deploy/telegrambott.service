@@ -1,0 +1,18 @@
+# Запуск без Docker через systemd.
+# Предполагается, что проект лежит в /opt/telegrambott и создан .venv (см. README).
+#   sudo cp deploy/telegrambott.service /etc/systemd/system/
+#   sudo systemctl enable --now telegrambott
+[Unit]
+Description=Telegram auto-reply bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/telegrambott
+ExecStart=/opt/telegrambott/.venv/bin/python -m bot.main
+Restart=always
+RestartSec=5
+User=telegrambott
+
+[Install]
+WantedBy=multi-user.target
