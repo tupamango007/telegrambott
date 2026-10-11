@@ -5,10 +5,19 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
-def _bool(value: str | None, default: bool) -> bool:
-    if value is None or value == "":
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on", "да"}
+NOTIFY_MODES = {"all", "replies", "important", "off"}
+
+
+def _notify_mode(value: str | None) -> str:
+    value = (value or "all").strip().lower()
+    # Старые значения true/false из прошлых версий .env
+    if value in {"1", "true", "yes", "on", "да"}:
+        return "all"
+    if value in {"0", "false", "no", "нет"}:
+        return "off"
+    if value not in NOTIFY_MODES:
+        raise RuntimeError(f"NOTIFY_OWNER должен быть одним из: {', '.join(sorted(NOTIFY_MODES))}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -19,7 +28,7 @@ class Config:
     reply_delay_seconds: float
     owner_takeover_minutes: int
     reply_cooldown_minutes: int
-    notify_owner: bool
+    notify_mode: str  # all | replies | important | off
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -34,5 +43,5 @@ class Config:
             reply_delay_seconds=float(os.getenv("REPLY_DELAY_SECONDS", "8")),
             owner_takeover_minutes=int(os.getenv("OWNER_TAKEOVER_MINUTES", "30")),
             reply_cooldown_minutes=int(os.getenv("REPLY_COOLDOWN_MINUTES", "60")),
-            notify_owner=_bool(os.getenv("NOTIFY_OWNER"), True),
+            notify_mode=_notify_mode(os.getenv("NOTIFY_OWNER")),
         )
