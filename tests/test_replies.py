@@ -72,3 +72,8 @@ def test_store_keeps_last_good_version(tmp_path):
     assert store.get().default == ["Занят"]
     path.write_text("default = [сломано", encoding="utf-8")
     assert store.get().default == ["Занят"]
+
+
+def test_store_falls_back_to_example(tmp_path):
+    store = TemplateStore(tmp_path / "missing.toml", fallback=EXAMPLE)
+    assert store.get().default
