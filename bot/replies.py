@@ -98,16 +98,21 @@ def choose_reply(templates: Templates, text: str, name: str, now: datetime) -> R
 class TemplateStore:
     """Читает replies.toml при каждом обращении; при ошибке в файле оставляет прошлую версию."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, fallback: Path | None = Path("replies.example.toml")):
         self._path = path
+        self._fallback = fallback
         self._templates = Templates(default=[])
 
     def get(self) -> Templates:
+        path = self._path
+        if not path.exists() and self._fallback is not None and self._fallback.exists():
+            # Например, на хостинге, куда залит только репозиторий: берём шаблоны из примера.
+            path = self._fallback
         try:
-            with self._path.open("rb") as f:
+            with path.open("rb") as f:
                 self._templates = Templates.from_dict(tomllib.load(f))
         except FileNotFoundError:
-            log.warning("Файл шаблонов %s не найден", self._path)
+            log.warning("Файл шаблонов %s не найден", path)
         except (tomllib.TOMLDecodeError, ValueError, TypeError, AttributeError, KeyError) as e:
-            log.error("Ошибка в %s, использую прошлую версию: %s", self._path, e)
+            log.error("Ошибка в %s, использую прошлую версию: %s", path, e)
         return self._templates
