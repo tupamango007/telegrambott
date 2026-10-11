@@ -100,6 +100,9 @@ def create_router(config: Config, storage: Storage, templates: TemplateStore) ->
     # Сообщения собеседника, пришедшие за время ожидания перед ответом.
     unanswered: dict[int, list[Incoming]] = {}
 
+    def is_owner(user_id: int) -> bool:
+        return user_id == config.owner_id or storage.is_owner(user_id)
+
     async def get_connection(bot: Bot, connection_id: str) -> Connection:
         conn = storage.get_connection(connection_id)
         if conn is None:
@@ -224,7 +227,7 @@ def create_router(config: Config, storage: Storage, templates: TemplateStore) ->
 
     @router.callback_query(F.data.regexp(r"^(ignore|unignore|pause):-?\d+$"))
     async def on_chat_button(callback: CallbackQuery) -> None:
-        if not storage.is_owner(callback.from_user.id):
+        if not is_owner(callback.from_user.id):
             await callback.answer()
             return
         action, raw_id = callback.data.split(":")
@@ -245,10 +248,13 @@ def create_router(config: Config, storage: Storage, templates: TemplateStore) ->
 
     @router.message(private_chat, Command("start", "help"))
     async def cmd_help(message: Message) -> None:
-        if not storage.is_owner(message.from_user.id):
+        if not is_owner(message.from_user.id):
             await message.answer(
                 "Привет! Этот бот отвечает на сообщения за своего владельца.\n"
-                "Чтобы подключить его к своему аккаунту: Настройки → Telegram Business → Чат-боты."
+                "Чтобы подключить его к своему аккаунту: Настройки → Telegram Business → Чат-боты.\n\n"
+                f"Ваш Telegram ID: <code>{message.from_user.id}</code> — если это ваш бот, "
+                "укажите его в переменной OWNER_ID.",
+                parse_mode="HTML",
             )
             return
         await message.answer(
@@ -266,14 +272,14 @@ def create_router(config: Config, storage: Storage, templates: TemplateStore) ->
 
     @router.message(private_chat, Command("on", "off"))
     async def cmd_toggle(message: Message, command: CommandObject) -> None:
-        if not storage.is_owner(message.from_user.id):
+        if not is_owner(message.from_user.id):
             return
         storage.set_enabled(command.command == "on")
         await message.answer("✅ Автоответы включены" if storage.is_enabled() else "⏸ Автоответы выключены")
 
     @router.message(private_chat, Command("status"))
     async def cmd_status(message: Message) -> None:
-        if not storage.is_owner(message.from_user.id):
+        if not is_owner(message.from_user.id):
             return
         state = "включены" if storage.is_enabled() else "выключены"
         await message.answer(
@@ -282,7 +288,7 @@ def create_router(config: Config, storage: Storage, templates: TemplateStore) ->
 
     @router.message(private_chat, Command("ignore", "unignore"))
     async def cmd_ignore(message: Message, command: CommandObject) -> None:
-        if not storage.is_owner(message.from_user.id):
+        if not is_owner(message.from_user.id):
             return
         try:
             chat_id = int((command.args or "").strip())
@@ -294,9 +300,8 @@ def create_router(config: Config, storage: Storage, templates: TemplateStore) ->
         await message.answer(f"Чат {chat_id}: " + ("бот не отвечает" if ignored else "бот снова отвечает"))
 
     @router.message(private_chat, F.sticker)
-    async def on_owner_sticker(message: Message) -> None:
-        if not storage.is_owner(message.from_user.id):
-            return
+    async def on_sticker_in_private(message: Message) -> None:
+        # ID стикера не секрет — показываем всем, чтобы не зависеть от того, узнал ли бот владельца.
         file_id = message.sticker.file_id
         await message.answer(
             f"ID стикера:\n<code>{file_id}</code>\n\n"

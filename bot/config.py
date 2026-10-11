@@ -29,6 +29,7 @@ class Config:
     owner_takeover_minutes: int
     reply_cooldown_minutes: int
     notify_mode: str  # all | replies | important | off
+    owner_id: int | None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -44,4 +45,5 @@ class Config:
             owner_takeover_minutes=int(os.getenv("OWNER_TAKEOVER_MINUTES", "30")),
             reply_cooldown_minutes=int(os.getenv("REPLY_COOLDOWN_MINUTES", "60")),
             notify_mode=_notify_mode(os.getenv("NOTIFY_OWNER")),
+            owner_id=int(os.environ["OWNER_ID"]) if os.getenv("OWNER_ID", "").strip() else None,
         )
