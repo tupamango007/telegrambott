@@ -32,7 +32,7 @@ replies = ["Я уже сплю 😴 Отвечу утром"]
 
 # Ответ на сообщение, где только стикер(ы). Пусто — на стикеры бот не отвечает.
 [on_sticker]
-stickers = []
+stickers = ["CAACAgIAAxkBAAMEasvD5rEqqLRtcE4uSXpRDDO6MiYAAodLAAIh8JFLwen_q3EHUZs9BA"]
 # replies = ["😄"]
 
 # Правила по ключевым словам: срабатывает первое, где нашлось любое слово.
