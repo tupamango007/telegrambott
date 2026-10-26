@@ -3,10 +3,12 @@
 import asyncio
 import html
 import logging
+import random
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     BusinessConnection,
@@ -17,7 +19,7 @@ from aiogram.types import (
 )
 
 from .config import Config
-from .replies import Reply, TemplateStore, choose_reply, is_important
+from .replies import Reply, TemplateStore, choose_followup, choose_reply, is_important
 from .storage import Connection, Storage
 
 log = logging.getLogger(__name__)
@@ -37,12 +39,19 @@ CONTENT_LABELS = {
 NOTIFY_PREVIEW_LIMIT = 1500
 PAUSE_BUTTON_MINUTES = 60
 
+# «Человеческий» ритм ответа
+TYPING_CHARS_PER_SECOND = (4.0, 7.0)  # скорость набора на телефоне
+MAX_TYPING_SECONDS = 7.0
+READING_PAUSE_SECONDS = (1.0, 3.0)  # прочитал — подумал — начал печатать
+BETWEEN_MESSAGES_SECONDS = (0.5, 1.5)
+
 
 @dataclass(frozen=True)
 class Incoming:
     text: str  # текст или подпись — по нему подбираются шаблоны
     display: str  # как показать сообщение в оповещении
     is_sticker: bool
+    message_id: int = 0
 
 
 def message_text(message: Message) -> str:
@@ -53,7 +62,7 @@ def incoming_from_message(message: Message) -> Incoming:
     text = message_text(message)
     label = CONTENT_LABELS.get(message.content_type, "") if not message.text else ""
     display = " ".join(p for p in (label, text) if p) or f"[{message.content_type}]"
-    return Incoming(text, display, message.sticker is not None)
+    return Incoming(text, display, message.sticker is not None, message.message_id)
 
 
 def connection_from_telegram(bc: BusinessConnection) -> Connection:
@@ -87,7 +96,8 @@ def format_notification(
         body = body[:NOTIFY_PREVIEW_LIMIT] + "…"
     lines = [head, html.escape(body), ""]
     if reply is not None:
-        answer = " + ".join(p for p in (reply.text and html.escape(reply.text), reply.sticker and "[стикер]") if p)
+        texts = " / ".join(html.escape(m) for m in reply.messages)
+        answer = " + ".join(p for p in (texts, reply.sticker and "[стикер]") if p)
         lines.append(f"🤖 Ответил: {answer}")
     elif status:
         lines.append(f"🤐 Не ответил: {status}")
@@ -99,6 +109,8 @@ def create_router(config: Config, storage: Storage, templates: TemplateStore) ->
     pending: dict[int, asyncio.Task] = {}
     # Сообщения собеседника, пришедшие за время ожидания перед ответом.
     unanswered: dict[int, list[Incoming]] = {}
+    # Последний отправленный вариант в каждом чате — чтобы не повторяться подряд.
+    last_variant: dict[int, str] = {}
 
     def is_owner(user_id: int) -> bool:
         return user_id == config.owner_id or storage.is_owner(user_id)
@@ -122,27 +134,55 @@ def create_router(config: Config, storage: Storage, templates: TemplateStore) ->
             return "пауза в этом чате"
         return None
 
-    async def send_reply(bot: Bot, chat_id: int, conn: Connection, reply: Reply) -> bool:
-        """Отправляет ответ «по-человечески»: сначала статус набора, потом сообщение."""
-        if reply.text:
-            await bot.send_chat_action(chat_id, "typing", business_connection_id=conn.id)
-            await asyncio.sleep(min(1 + len(reply.text) / 25, 4))
-            # Пока бот «печатал», владелец мог ответить сам.
+    async def show_action(bot: Bot, chat_id: int, conn: Connection, action: str, seconds: float) -> None:
+        # Статус «печатает…» в Telegram гаснет через ~5 секунд, поэтому обновляем его.
+        loop = asyncio.get_running_loop()
+        end = loop.time() + seconds
+        while True:
+            await bot.send_chat_action(chat_id, action, business_connection_id=conn.id)
+            left = end - loop.time()
+            if left <= 4.0:
+                await asyncio.sleep(max(left, 0))
+                return
+            await asyncio.sleep(4.0)
+
+    async def send_reply(bot: Bot, chat_id: int, conn: Connection, reply: Reply, read_message_id: int) -> bool:
+        """Отвечает как человек: прочитал, подумал, напечатал. Возвращает, ушло ли хоть что-то."""
+        if config.mark_as_read and read_message_id:
+            try:
+                await bot.read_business_message(conn.id, chat_id, read_message_id)
+            except TelegramAPIError as e:
+                log.debug("Не удалось отметить прочитанным: %s", e)
+        await asyncio.sleep(random.uniform(*READING_PAUSE_SECONDS))
+
+        sent = False
+        for part in reply.messages:
+            # Владелец мог подключиться к разговору в любой момент.
             if why_not_reply(chat_id, conn):
-                return False
-            await bot.send_message(chat_id, reply.text, business_connection_id=conn.id)
+                return sent
+            if sent:
+                await asyncio.sleep(random.uniform(*BETWEEN_MESSAGES_SECONDS))
+            typing_time = min(1 + len(part) / random.uniform(*TYPING_CHARS_PER_SECOND), MAX_TYPING_SECONDS)
+            await show_action(bot, chat_id, conn, "typing", typing_time)
+            if why_not_reply(chat_id, conn):
+                return sent
+            await bot.send_message(chat_id, part, business_connection_id=conn.id)
+            sent = True
         if reply.sticker:
-            await bot.send_chat_action(chat_id, "choose_sticker", business_connection_id=conn.id)
-            await asyncio.sleep(1)
             if why_not_reply(chat_id, conn):
-                return bool(reply.text)
+                return sent
+            await show_action(bot, chat_id, conn, "choose_sticker", random.uniform(1.0, 2.5))
+            if why_not_reply(chat_id, conn):
+                return sent
             await bot.send_sticker(chat_id, reply.sticker, business_connection_id=conn.id)
-        return True
+            sent = True
+        return sent
 
     async def process_later(bot: Bot, message: Message, conn: Connection) -> None:
         chat_id = message.chat.id
         # Ждём: собеседник может дописать ещё сообщения или владелец ответит сам.
-        await asyncio.sleep(config.reply_delay_seconds)
+        # Задержка немного «плавает», чтобы ответ не приходил секунда в секунду.
+        await asyncio.sleep(config.reply_delay_seconds * random.uniform(0.7, 1.5))
         items = unanswered.pop(chat_id, [])
         if not items or storage.is_paused(chat_id):
             return
@@ -156,16 +196,27 @@ def create_router(config: Config, storage: Storage, templates: TemplateStore) ->
         reply: Reply | None = None
         status = why_not_reply(chat_id, conn)
         if status is None:
-            reply = choose_reply(tpl, text, name, datetime.now(timezone.utc), only_sticker)
-            if reply is None:
+            now = datetime.now(timezone.utc)
+            cooldown = config.reply_cooldown_minutes * 60
+            reply = choose_reply(tpl, text, name, now, only_sticker, avoid=last_variant.get(chat_id))
+            if reply is not None and storage.sent_recently(chat_id, reply.key, cooldown):
+                # Собеседник пишет снова — один раз отвечаем уточнением («я тут, просто занят»),
+                # дальше молчим, чтобы не превращаться в спам.
+                followup = None
+                if reply.key != "sticker" and not storage.sent_recently(chat_id, "followup", cooldown):
+                    followup = choose_followup(tpl, name, now, avoid=last_variant.get(chat_id))
+                reply = followup
+                status = None if followup else "уже отвечал недавно"
+            elif reply is None:
                 status = "ответ не нужен"
-            elif storage.sent_recently(chat_id, reply.key, config.reply_cooldown_minutes * 60):
-                reply, status = None, "уже отвечал недавно"
-            elif await send_reply(bot, chat_id, conn, reply):
+
+            if reply is not None:
+                if not await send_reply(bot, chat_id, conn, reply, items[-1].message_id):
+                    return  # владелец подключился к разговору
                 storage.mark_sent(chat_id, reply.key)
+                if reply.variant:
+                    last_variant[chat_id] = reply.variant
                 log.info("Ответил в чат %s шаблоном %s", chat_id, reply.key)
-            else:
-                return  # владелец подключился к разговору
 
         mode = config.notify_mode
         if mode == "off" or storage.is_paused(chat_id):

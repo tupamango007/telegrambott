@@ -39,16 +39,16 @@ def test_connection_from_telegram_uses_rights():
 
 def test_incoming_labels():
     photo = msg(caption="смотри", photo=[PhotoSize(file_id="f", file_unique_id="u", width=1, height=1)])
-    assert incoming_from_message(photo) == Incoming("смотри", "[фото] смотри", False)
-    assert incoming_from_message(msg(text="<b>")) == Incoming("<b>", "<b>", False)
+    assert incoming_from_message(photo) == Incoming("смотри", "[фото] смотри", False, 1)
+    assert incoming_from_message(msg(text="<b>")) == Incoming("<b>", "<b>", False, 1)
 
 
 def test_format_notification():
     items = [Incoming("это <срочно>", "это <срочно>", False), Incoming("", "[стикер]", True)]
-    text = format_notification("Аня & Ко", 7, items, Reply("rule:0", "Скоро", "S1"), None, True)
+    text = format_notification("Аня & Ко", 7, items, Reply("rule:0", "Скоро || Жди", "S1"), None, True)
     assert text.startswith('🚨 <b>Важное</b> от <a href="tg://user?id=7">Аня &amp; Ко</a>')
     assert "это &lt;срочно&gt;\n[стикер]" in text
-    assert text.endswith("🤖 Ответил: Скоро + [стикер]")
+    assert text.endswith("🤖 Ответил: Скоро / Жди + [стикер]")
     quiet = format_notification("Аня", 7, items[:1], None, "уже отвечал недавно", False)
     assert quiet.startswith("💬") and quiet.endswith("🤐 Не ответил: уже отвечал недавно")
 
