@@ -2,7 +2,17 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from bot.replies import TemplateStore, Templates, choose_reply, is_important, is_night, normalize
+from bot.replies import (
+    Reply,
+    TemplateStore,
+    Templates,
+    choose_followup,
+    choose_reply,
+    greeting,
+    is_important,
+    is_night,
+    normalize,
+)
 
 EXAMPLE = Path(__file__).parent.parent / "replies.example.toml"
 
@@ -105,3 +115,29 @@ def test_is_important():
     assert is_important(templates(), "очень СРОЧНО")
     assert not is_important(templates(), "привет")
     assert not is_important(templates(rules=[{"keywords": ["срочно"], "replies": "x"}]), "срочно")
+
+
+def test_greeting_placeholder_uses_timezone():
+    t = templates(default="{greeting}, {name}!", timezone="Europe/Moscow")
+    morning_msk = datetime(2026, 10, 11, 6, 0, tzinfo=timezone.utc)  # 09:00 по Москве
+    assert choose_reply(t, "привет", "Аня", morning_msk).text == "Доброе утро, Аня!"
+    assert [greeting(h) for h in (8, 13, 20, 2)] == ["Доброе утро", "Добрый день", "Добрый вечер", "Доброй ночи"]
+
+
+def test_multipart_messages():
+    assert Reply("default", "Привет! ||  Сейчас занят || ").messages == ["Привет!", "Сейчас занят"]
+    assert Reply("sticker", None, "S").messages == []
+
+
+def test_avoid_repeating_variant():
+    t = templates(default=["A", "B"])
+    for _ in range(20):
+        assert choose_reply(t, "привет", "", DAY, avoid="A").text == "B"
+    # единственный вариант всё равно используется
+    assert choose_reply(templates(default="A"), "привет", "", DAY, avoid="A").text == "A"
+
+
+def test_followup():
+    assert choose_followup(templates(), "", DAY) is None
+    reply = choose_followup(templates(followup={"replies": "Я тут, {name}"}), "Аня", DAY)
+    assert (reply.key, reply.text) == ("followup", "Я тут, Аня")

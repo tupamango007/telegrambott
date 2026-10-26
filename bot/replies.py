@@ -46,6 +46,7 @@ class Templates:
     night_start: int | None = None
     night_end: int | None = None
     on_sticker: Section = field(default_factory=Section)
+    followup: Section = field(default_factory=Section)
     sticker_chance: float = 0.5
     timezone: ZoneInfo | None = None
 
@@ -68,16 +69,28 @@ class Templates:
             night_start=night.get("start"),
             night_end=night.get("end"),
             on_sticker=Section.from_value(data.get("on_sticker") or {}),
+            followup=Section.from_value(data.get("followup") or {}),
             sticker_chance=float(data.get("sticker_chance", 0.5)),
             timezone=ZoneInfo(tz) if tz else None,
         )
 
 
+# Разделитель частей ответа: "Привет! || Сейчас занят" уйдёт двумя сообщениями.
+PART_SEPARATOR = "||"
+
+
 @dataclass(frozen=True)
 class Reply:
-    key: str  # какой шаблон сработал: "default", "night", "sticker" или "rule:N"
+    key: str  # какой шаблон сработал: "default", "night", "sticker", "followup" или "rule:N"
     text: str | None = None
     sticker: str | None = None
+    variant: str | None = None  # исходный вариант из шаблона — чтобы не повторять его подряд
+
+    @property
+    def messages(self) -> list[str]:
+        if not self.text:
+            return []
+        return [p.strip() for p in self.text.split(PART_SEPARATOR) if p.strip()]
 
 
 def _as_list(value) -> list[str]:
@@ -100,6 +113,22 @@ def is_night(hour: int, start: int | None, end: int | None) -> bool:
     return hour >= start or hour < end
 
 
+def greeting(hour: int) -> str:
+    if 5 <= hour < 12:
+        return "Доброе утро"
+    if 12 <= hour < 18:
+        return "Добрый день"
+    if 18 <= hour < 23:
+        return "Добрый вечер"
+    return "Доброй ночи"
+
+
+def _pick(variants: list[str], avoid: str | None) -> str:
+    # Не повторяем тот же вариант, что был в прошлый раз, если есть из чего выбрать.
+    choices = [v for v in variants if v != avoid] or variants
+    return random.choice(choices)
+
+
 def match_rule(templates: Templates, text: str) -> tuple[int, Rule] | None:
     norm = normalize(text)
     if not norm:
@@ -116,25 +145,41 @@ def is_important(templates: Templates, text: str) -> bool:
     return match is not None and match[1].notify
 
 
-def _build(key: str, section: Section, name: str, sticker_chance: float) -> Reply | None:
-    text = random.choice(section.replies).replace("{name}", name).strip() if section.replies else ""
+def _build(
+    key: str, section: Section, templates: Templates, name: str, now: datetime, avoid: str | None
+) -> Reply | None:
+    variant = _pick(section.replies, avoid) if section.replies else None
+    text = ""
+    if variant:
+        text = variant.replace("{name}", name).replace("{greeting}", greeting(now.hour)).strip()
     sticker = None
-    if section.stickers and (not text or random.random() < sticker_chance):
+    if section.stickers and (not text or random.random() < templates.sticker_chance):
         sticker = random.choice(section.stickers)
     if not text and not sticker:
         return None
-    return Reply(key, text or None, sticker)
+    return Reply(key, text or None, sticker, variant)
+
+
+def _local(templates: Templates, now: datetime) -> datetime:
+    return now.astimezone(templates.timezone) if templates.timezone is not None else now
 
 
 def choose_reply(
-    templates: Templates, text: str, name: str, now: datetime, only_sticker: bool = False
+    templates: Templates,
+    text: str,
+    name: str,
+    now: datetime,
+    only_sticker: bool = False,
+    avoid: str | None = None,
 ) -> Reply | None:
     """Подбирает ответ на сообщение или возвращает None, если отвечать не нужно.
 
     only_sticker — собеседник прислал только стикер(ы), без текста.
+    avoid — вариант, отправленный в этот чат в прошлый раз.
     """
+    now = _local(templates, now)
     if only_sticker:
-        return _build("sticker", templates.on_sticker, name, templates.sticker_chance)
+        return _build("sticker", templates.on_sticker, templates, name, now, avoid)
 
     norm = normalize(text)
     if norm and norm in templates.skip:
@@ -142,13 +187,16 @@ def choose_reply(
 
     if match := match_rule(templates, text):
         i, rule = match
-        return _build(f"rule:{i}", rule.section, name, templates.sticker_chance)
+        return _build(f"rule:{i}", rule.section, templates, name, now, avoid)
 
-    if templates.timezone is not None:
-        now = now.astimezone(templates.timezone)
     if templates.night and is_night(now.hour, templates.night_start, templates.night_end):
-        return _build("night", templates.night, name, templates.sticker_chance)
-    return _build("default", templates.default, name, templates.sticker_chance)
+        return _build("night", templates.night, templates, name, now, avoid)
+    return _build("default", templates.default, templates, name, now, avoid)
+
+
+def choose_followup(templates: Templates, name: str, now: datetime, avoid: str | None = None) -> Reply | None:
+    """Ответ, когда собеседник пишет снова, а основной шаблон уже был отправлен недавно."""
+    return _build("followup", templates.followup, templates, name, _local(templates, now), avoid)
 
 
 class TemplateStore:

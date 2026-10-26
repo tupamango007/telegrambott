@@ -30,6 +30,7 @@ class Config:
     reply_cooldown_minutes: int
     notify_mode: str  # all | replies | important | off
     owner_id: int | None
+    mark_as_read: bool
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -46,4 +47,5 @@ class Config:
             reply_cooldown_minutes=int(os.getenv("REPLY_COOLDOWN_MINUTES", "60")),
             notify_mode=_notify_mode(os.getenv("NOTIFY_OWNER")),
             owner_id=int(os.environ["OWNER_ID"]) if os.getenv("OWNER_ID", "").strip() else None,
+            mark_as_read=os.getenv("MARK_AS_READ", "true").strip().lower() not in {"0", "false", "no", "нет"},
         )
